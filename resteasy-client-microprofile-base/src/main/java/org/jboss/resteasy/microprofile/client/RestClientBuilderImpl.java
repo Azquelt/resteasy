@@ -25,6 +25,7 @@ import org.jboss.resteasy.microprofile.client.publisher.MpPublisherMessageBodyRe
 import org.jboss.resteasy.spi.ResteasyProviderFactory;
 import org.jboss.resteasy.spi.ResteasyUriBuilder;
 
+import javax.enterprise.inject.spi.AnnotatedType;
 import javax.enterprise.inject.spi.BeanManager;
 import javax.enterprise.inject.spi.CDI;
 import javax.net.ssl.HostnameVerifier;
@@ -337,8 +338,9 @@ public class RestClientBuilderImpl implements RestClientBuilder {
         interfaces[2] = Closeable.class;
 
         final BeanManager beanManager = getBeanManager();
+        final AnnotatedType<?> annotatedType = (AnnotatedType<?>) getConfiguration().getProperty("annotatedType");
         T proxy = (T) Proxy.newProxyInstance(classLoader, interfaces,
-                new ProxyInvocationHandler(aClass, actualClient, getLocalProviderInstances(), client, beanManager));
+                new ProxyInvocationHandler(aClass, actualClient, getLocalProviderInstances(), client, beanManager, annotatedType));
         ClientHeaderProviders.registerForClass(aClass, proxy, beanManager);
         return proxy;
     }

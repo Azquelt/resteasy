@@ -9,6 +9,7 @@ import javax.enterprise.context.Dependent;
 import javax.enterprise.context.spi.CreationalContext;
 import javax.enterprise.inject.Any;
 import javax.enterprise.inject.Default;
+import javax.enterprise.inject.spi.AnnotatedType;
 import javax.enterprise.inject.spi.Bean;
 import javax.enterprise.inject.spi.BeanManager;
 import javax.enterprise.inject.spi.InjectionPoint;
@@ -74,6 +75,8 @@ public class RestClientDelegateBean implements Bean<Object>, PassivationCapable 
 
     private final Class<?> proxyType;
 
+    private final AnnotatedType<?> annotatedType;
+
     private final Class<? extends Annotation> scope;
 
     private final BeanManager beanManager;
@@ -84,8 +87,9 @@ public class RestClientDelegateBean implements Bean<Object>, PassivationCapable 
 
     private final Optional<String> configKey;
 
-    RestClientDelegateBean(final Class<?> proxyType, final BeanManager beanManager, final Optional<String> baseUri, final Optional<String> configKey) {
+    RestClientDelegateBean(final Class<?> proxyType, final AnnotatedType<?> annotatedType, final BeanManager beanManager, final Optional<String> baseUri, final Optional<String> configKey) {
         this.proxyType = proxyType;
+        this.annotatedType = annotatedType;
         this.beanManager = beanManager;
         this.baseUri = baseUri;
         this.configKey = configKey;
@@ -126,6 +130,11 @@ public class RestClientDelegateBean implements Bean<Object>, PassivationCapable 
         configureSsl(builder);
 
         getConfigProperties().forEach(builder::property);
+
+        if (annotatedType != null) {
+            builder.property("annotatedType", annotatedType);
+        }
+
         return builder.build(proxyType);
     }
 

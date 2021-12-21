@@ -6,6 +6,7 @@ import javax.enterprise.context.spi.CreationalContext;
 import javax.enterprise.event.Observes;
 import javax.enterprise.inject.spi.AfterBeanDiscovery;
 import javax.enterprise.inject.spi.AfterDeploymentValidation;
+import javax.enterprise.inject.spi.AnnotatedType;
 import javax.enterprise.inject.spi.Bean;
 import javax.enterprise.inject.spi.BeanManager;
 import javax.enterprise.inject.spi.Extension;
@@ -15,14 +16,13 @@ import javax.enterprise.inject.spi.WithAnnotations;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import javax.enterprise.inject.spi.CDI;
 
 public class RestClientExtension implements Extension {
 
-    private Set<RestClientData> proxyTypes = new LinkedHashSet<>();
+    private Set<Class<?>> proxyTypes = new LinkedHashSet<>();
 
     private Set<Throwable> errors = new LinkedHashSet<>();
 
@@ -30,12 +30,7 @@ public class RestClientExtension implements Extension {
                                    @WithAnnotations(RegisterRestClient.class) ProcessAnnotatedType<?> type) {
         Class<?> javaClass = type.getAnnotatedType().getJavaClass();
         if (javaClass.isInterface()) {
-            RegisterRestClient annotation = type.getAnnotatedType().getAnnotation(RegisterRestClient.class);
-            Optional<String> maybeUri = extractBaseUri(annotation);
-            Optional<String> maybeConfigKey = extractConfigKey(annotation);
-
-            proxyTypes.add(new RestClientData(javaClass, maybeUri, maybeConfigKey));
-            type.veto();
+            proxyTypes.add(javaClass);
         } else {
             errors.add(new IllegalArgumentException("Rest client needs to be an interface " + javaClass));
         }
@@ -52,8 +47,16 @@ public class RestClientExtension implements Extension {
     }
 
     public void createProxy(@Observes AfterBeanDiscovery afterBeanDiscovery, BeanManager beanManager) {
-        for (RestClientData clientData : proxyTypes) {
-            afterBeanDiscovery.addBean(new RestClientDelegateBean(clientData.javaClass, beanManager, clientData.baseUri, clientData.configKey));
+        for (Class<?> proxyType : proxyTypes) {
+            for (AnnotatedType<?> annotatedType : afterBeanDiscovery.getAnnotatedTypes(proxyType)) {
+                RegisterRestClient annotation = annotatedType.getAnnotation(RegisterRestClient.class);
+                if (annotation == null) {
+                    continue; // Another extension may have removed the annotation
+                }
+                Optional<String> maybeUri = extractBaseUri(annotation);
+                Optional<String> maybeConfigKey = extractConfigKey(annotation);
+                afterBeanDiscovery.addBean(new RestClientDelegateBean(proxyType, annotatedType, beanManager, maybeUri, maybeConfigKey));
+            }
         }
     }
 
@@ -86,31 +89,6 @@ public class RestClientExtension implements Extension {
     @Deprecated
     public static void clearBeanManager() {
         // nothing to do
-    }
-
-    private static class RestClientData {
-        private final Class<?> javaClass;
-        private final Optional<String> baseUri;
-        private final Optional<String> configKey;
-
-        private RestClientData(final Class<?> javaClass, final Optional<String> baseUri, final Optional<String> configKey) {
-            this.javaClass = javaClass;
-            this.baseUri = baseUri;
-            this.configKey = configKey;
-        }
-
-        @Override
-        public boolean equals(Object o) {
-            if (this == o) return true;
-            if (o == null || getClass() != o.getClass()) return false;
-            RestClientData that = (RestClientData) o;
-            return javaClass.equals(that.javaClass);
-        }
-
-        @Override
-        public int hashCode() {
-            return Objects.hash(javaClass);
-        }
     }
 
     /**

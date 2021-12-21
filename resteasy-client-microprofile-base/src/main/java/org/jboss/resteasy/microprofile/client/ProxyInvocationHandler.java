@@ -6,6 +6,8 @@ import org.jboss.resteasy.client.jaxrs.ResteasyClient;
 import org.jboss.resteasy.microprofile.client.header.ClientHeaderFillingException;
 
 import javax.enterprise.context.spi.CreationalContext;
+import javax.enterprise.inject.spi.AnnotatedMethod;
+import javax.enterprise.inject.spi.AnnotatedType;
 import javax.enterprise.inject.spi.BeanManager;
 import javax.enterprise.inject.spi.CDI;
 import javax.enterprise.inject.spi.InterceptionType;
@@ -15,10 +17,10 @@ import javax.ws.rs.client.ResponseProcessingException;
 import javax.ws.rs.ext.ParamConverter;
 import javax.ws.rs.ext.ParamConverterProvider;
 import java.lang.annotation.Annotation;
+import java.lang.annotation.Repeatable;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
-import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.util.ArrayList;
@@ -51,14 +53,16 @@ public class ProxyInvocationHandler implements InvocationHandler {
     public ProxyInvocationHandler(final Class<?> restClientInterface,
                            final Object target,
                            final Set<Object> providerInstances,
-                           final ResteasyClient client, final BeanManager beanManager) {
+                           final ResteasyClient client,
+                           final BeanManager beanManager,
+                           final AnnotatedType<?> annotatedType) {
         this.target = target;
         this.providerInstances = providerInstances;
         this.client = client;
         this.closed = new AtomicBoolean();
         if (beanManager != null) {
             this.creationalContext = beanManager.createCreationalContext(null);
-            this.interceptorChains = initInterceptorChains(beanManager, creationalContext, restClientInterface);
+            this.interceptorChains = initInterceptorChains(beanManager, creationalContext, restClientInterface, annotatedType);
         } else {
             this.creationalContext = null;
             this.interceptorChains = Collections.emptyMap();
@@ -206,17 +210,33 @@ public class ProxyInvocationHandler implements InvocationHandler {
         return genericTypes;
     }
 
-    private static List<Annotation> getBindings(Annotation[] annotations, BeanManager beanManager) {
-        if (annotations.length == 0) {
+    private static List<Annotation> getBindings(Set<Annotation> annotations, BeanManager beanManager) {
+        if (annotations.isEmpty()) {
             return Collections.emptyList();
         }
         List<Annotation> bindings = new ArrayList<>();
         for (Annotation annotation : annotations) {
             if (beanManager.isInterceptorBinding(annotation.annotationType())) {
                 bindings.add(annotation);
+            } else {
+                Repeatable repeatable = annotation.annotationType().getAnnotation(Repeatable.class);
+                if (repeatable != null && beanManager.isInterceptorBinding(repeatable.value())) {
+                    for (Annotation binding : getRepeated(annotation)) {
+                        bindings.add(binding);
+                    }
+                }
             }
         }
         return bindings;
+    }
+
+    private static Annotation[] getRepeated(Annotation containerAnnotation) {
+        try {
+            Method valueMethod = containerAnnotation.annotationType().getMethod("value");
+            return (Annotation[]) valueMethod.invoke(containerAnnotation);
+        } catch (NoSuchMethodException | SecurityException | IllegalAccessException | IllegalArgumentException | InvocationTargetException e) {
+            return new Annotation[] {};
+        }
     }
 
     private static BeanManager getBeanManager(Class<?> restClientInterface) {
@@ -229,16 +249,20 @@ public class ProxyInvocationHandler implements InvocationHandler {
         }
     }
 
-    private static Map<Method, List<InvocationContextImpl.InterceptorInvocation>> initInterceptorChains(BeanManager beanManager, CreationalContext<?> creationalContext, Class<?> restClientInterface) {
+    private static Map<Method, List<InvocationContextImpl.InterceptorInvocation>> initInterceptorChains(BeanManager beanManager, CreationalContext<?> creationalContext, Class<?> restClientInterface, AnnotatedType<?> annotatedType) {
+
+        if (annotatedType == null) {
+            return Collections.emptyMap();
+        }
 
         Map<Method, List<InvocationContextImpl.InterceptorInvocation>> chains = new HashMap<>();
         // Interceptor as a key in a map is not entirely correct (custom interceptors) but should work in most cases
         Map<Interceptor<?>, Object> interceptorInstances = new HashMap<>();
 
-        List<Annotation> classLevelBindings = getBindings(restClientInterface.getAnnotations(), beanManager);
+        List<Annotation> classLevelBindings = getBindings(annotatedType.getAnnotations(), beanManager);
 
-        for (Method method : restClientInterface.getMethods()) {
-            if (method.isDefault() || Modifier.isStatic(method.getModifiers())) {
+        for (AnnotatedMethod<?> method : annotatedType.getMethods()) {
+            if (method.getJavaMember() == null || method.getJavaMember().isDefault() || method.isStatic()) {
                 continue;
             }
             List<Annotation> methodLevelBindings = getBindings(method.getAnnotations(), beanManager);
@@ -252,9 +276,9 @@ public class ProxyInvocationHandler implements InvocationHandler {
                     List<InvocationContextImpl.InterceptorInvocation> chain = new ArrayList<>();
                     for (Interceptor<?> interceptor : interceptors) {
                         chain.add(new InvocationContextImpl.InterceptorInvocation(interceptor,
-                                interceptorInstances.computeIfAbsent(interceptor, i -> beanManager.getReference(i, i.getBeanClass(), creationalContext))));
+                                interceptorInstances.computeIfAbsent(interceptor, i -> beanManager.getReference(i, Object.class, creationalContext))));
                     }
-                    chains.put(method, chain);
+                    chains.put(method.getJavaMember(), chain);
                 }
             }
         }
